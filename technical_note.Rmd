@@ -1,8 +1,7 @@
 ---
-title: "Technical Note"
-subtitle: "[[Template](https://github.com/useRconf/templates). _Recommended total reading time: 4-5min_]"
-author: ["Author1, Affiliation1", "Author2, Affiliation2"]
-#affiliations: ["useR", "R-Ladies"]
+title: "segmenter: A Wrapper for JAVA ChromHMM"
+subtitle: "Perform Chromatin Segmentation Analysis in R"
+author: ["Mahmoud Ahmed, Gyeongsang National University", "Deok Ryong Kim, Gyeongsang National University"]
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -17,92 +16,550 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## Abstract
 
-[Short statement or paragraph summarizing the Technical Note. Up to 250 words.]
-
-**Tips for structured abstract:** Background; Findings, the technical details of the method, how the method was performed and statistical tests used; Conclusions, brief summary and potential implications. Please minimize the use of abbreviations and do not cite references in the abstract.
+Chromatin segmentation analysis transforms ChIP-seq data into signals over the
+genome. The latter represents the observed states in a multivariate Markov model
+to predict the chromatin's underlying (hidden) states. *ChromHMM*, written in 
+*Java*, integrates histone modification datasets to learn the chromatin states
+de-novo. We developed an *R* package around this program to leverage the
+existing *R/Bioconductor* tools and data structures in the segmentation analysis
+context. `segmenter` wraps the *Java* modules to call *ChromHMM* and captures 
+the output in an `S4` object. This allows for iterating with different 
+parameters, which are given in *R* syntax. Capturing the output in *R* makes it
+easier to work with the results and to integrate them in downstream analyses.
+Finally, `segmenter` provides additional tools to test, select and visualize the
+models.
 
 ### Keywords
 
-R package development, R Shiny webapp, Bioinformatics
-
-## Findings
-
-The findings section can be broken into subsections with short informative headings. There is no maximum length for this section, but we encourage authors to be concise. You can include citations here [@allaire_rmarkdown_2020]. See example Markdown text below.
-
-### Including Rmd subsections
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document.
-
-### Including code
-
-You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
-```
-
-### Including math
-You can write math expressions using LaTeX formatting:
-$$
-ABC = pqr_{sub} \circ logABC
-$$
-
-### Including plots
-
-You can also embed plots, for example:
-
-```{r pressure, echo=FALSE}
-plot(pressure)
-```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+Chromatin Segmentation, ChromHMM, Histone Modification, ChIP-Seq
 
 ## Methods
 
-For Technical Notes, this section is specific for including any additional methods used in the manuscript, that are not part of the new work being described in the manuscript.
+## Hidden Markov Models
+
+Hidden Markov Models (HMM) assumes that a system (process) with unobservable or 
+hidden states can be modeled with a dependent observable process. In applying
+this model to segmentation analysis, the chromatin configurations are the hidden
+states and they can be modeled using histone modification markers that are 
+associated with these configurations [@Ernst2017].
+
+## [ChromHMM](http://compbio.mit.edu/ChromHMM/)
+
+*ChromHmm* is a Java program to learn chromatin states from multiple sets of 
+histone modification markers ChIP-seq datasets [@Ernst2012]. The states are 
+modeled as the combination of markers on the different regions of the genome. 
+A multi-variate hidden Markov model is used to model the presence or absence of 
+the markers. In addition, the fold-enrichment of the states over genomic 
+annotation and locations is calculated. These models can be useful in annotating
+genomes by showing where histone markers occur and interpreting this as a given
+chromatin configuration. By comparing states between different cells or 
+condition, one can determine the cell or condition specific changes in the 
+chromatin and study how they might impact the gene regulation.
+
+## This package!
+
+The goal of the `segmenter` package is to
+
+- Call *ChromHMM* using R syntax
+- Capture the output in R objects
+- Interact with the model output for the purposes of summarizing or visualizing
+
+## Findings
+
+# Segmentation analysis using `segmenter`
+
+## Inputs
+
+ChromHMM requires two types of input files. Those are
+
+- Genomic annotation files.
+
+The genomic annotation is divided into three different files
+
+  - Coordinates: the start and end location of genomic features to calculate
+  enrichment
+  - Anchors: the transcription start and end sites
+  - Chromosome size: the length of each chromosome
+
+ChromHMM contains pre-formatted files for commonly used genomes. We will
+be using the human genome (hg18).
+
+```{r setup}
+# load required libraries
+library(segmenter)
+library(Gviz)
+library(ComplexHeatmap)
+library(TxDb.Hsapiens.UCSC.hg18.knownGene)
+```
+
+```{r genomic_annotations}
+# coordinates
+coordsdir <- system.file('extdata/COORDS',
+                         package = 'chromhmmData')
+
+list.files(file.path(coordsdir, 'hg18'))
+
+# anchors
+anchorsdir <- system.file('extdata/ANCHORFILES',
+                          package = 'chromhmmData')
+
+list.files(file.path(anchorsdir, 'hg18'))
+
+# chromosomes' sizes
+chromsizefile <- system.file('extdata/CHROMSIZES',
+                             'hg18.txt',
+                              package = 'chromhmmData')
+
+readLines(chromsizefile, n = 3)
+```
+
+- Binarized signal files from the ChIP-seq data
+
+The binarized signal files are text files, often one for each chromosome, that
+divide the chromosome length into bins of a given size (rows) and have binary
+values 1 or 0 for each histone markers (columns). ChromHMM provide
+modules to generate these files from ChIP-seq aligned reads in `bam` or `bed`.
+Those modules are wrapped in two functions that can be called from within R.
+
+- `binarize_bam` convert `bam` files into binary columns of 0 or 1 depending on
+whether the given marker exist in each bin across the length of the chromosome.
+- `binarize_bed` similarly convert `bed` files.
+
+These files are often large and need to be prepared in advance. Here, we are
+showing only an example using a `bam` file with random reads. Because multiple
+files are often needed to generate chromatin models, a table is required to
+assign each file a chromatin marker and a cell type or condition. In addition,
+a file containing the size of each chromosome is required. Finally, the desired
+bin size is indicated, the default is 200kb.
+
+```{r cellmarkfiletable}
+# a table to assign marker and cell names to the bam files
+cellmarkfiletable <- system.file('extdata',
+                                 'cell_mark_table.tsv',
+                                 package = 'segmenter')
+
+readLines(cellmarkfiletable, n = 3)
+```
+
+```{r binary_inputs}
+# locate input and output
+inputdir <- system.file("extdata", package = "bamsignals")
+outputdir <- tempdir()
+```
+
+```{r binarize}
+# run command
+binarize_bam(inputdir,
+             chromsizefile = chromsizefile,
+             cellmarkfiletable = cellmarkfiletable,
+             outputdir = outputdir)
+
+# show output files
+example_binaries <- list.files(outputdir, pattern = '*_binary.txt')
+example_binaries
+
+# show the format of the binary file
+readLines(file.path(outputdir, example_binaries[1]), n = 3)
+```
+
+Note that the cell/condition and the chromosome name are written on the first 
+line and the last bin is often removed as the end of the chromosome does not
+reach the 200kb bin size.
+
+Two example files are provided by ChromHMM. Those were generated from two ChIP-
+seq experiments of nine histone modification markers in the K562 and GM12878
+cell lines. The aligned reads were counted and binarized into 0 or 1 in bins of 
+200kb in chromosome 11.
+
+```{r input_bins}
+# locate input and output files
+inputdir <- system.file('extdata/SAMPLEDATA_HG18',
+                        package = 'segmenter')
+
+list.files(inputdir)
+```
+
+## Model learning
+
+The main function in `segmenter` is called `learn_model`. This wraps the the 
+Java module that learns a chromatin segmentation model of a given number of 
+states. In addition to the input files explained before, the function takes the
+desired number of stats, `numstates` and the information that were used to 
+generate the binarized files. Those are the names of the genome `assembly`, the
+type of `annotation`, the `binsize` and the names of `cells` or conditions.
+
+```{r run_command}
+# run command
+obj <- learn_model(inputdir = inputdir,
+                   coordsdir = coordsdir,
+                   anchorsdir = anchorsdir,
+                   outputdir = outputdir,
+                   chromsizefile = chromsizefile,
+                   numstates = 3,
+                   assembly = 'hg18',
+                   cells = c('K562', 'GM12878'),
+                   annotation = 'RefSeq',
+                   binsize = 200)
+```
+
+The return of this function call is the an S4 `segmentation` object, which we
+describe next.
+
+## Output `segmentation` Object
+
+The `show` method prints a summary of the contents of the object. The three main
+variables of the data are the states, marks and cells. The output of the 
+learning process are saved in slots those are
+
+- `model`: the initial and final parameters of the models
+- `emission`: the probabilities of each mark being part of a given state
+- `transition`: the probabilities of each state transition to/from another
+- `overlap`: the enrichment of the states at every genomic features
+- `TSS`: the enrichment of the states around the transcription start sites
+- `TES`: the enrichment of the states around the transcription end sites
+- `segment`: the assignment of states to every bin in the genome
+- `bins`: the binarize inputs
+- `counts`: the non-binarized counts in every bin
+
+The last two slots are empty, unless indicated otherwise in the previous call. 
+Counts are only loaded when the path to the `bam` files are provided.
+
+```{r methods}
+# show the object
+show(obj)
+```
+
+For each slot, an accessor function with the same name is provided to access its
+contents. For example, to access the emission probabilities call `emission` on
+the object.
+
+```{r accessors}
+# access object slots
+emission(obj)
+```
+
+Some accessors more arguments to subset the object. For example, the `segment`
+method take a `cell` name to return on the segments in the corresponding cell.
+
+```{r subset}
+# subset the segment slot
+segment(obj, cell = 'K562')
+```
+
+# Comparing models
+
+To choose a model that fits the data well, one can learn multiple models with 
+different parameters, for example the number of states and compare them. In this
+example, we will be calling `learn_model` several times using `lapply` with the 
+same inputs except the number of states (`numstates`). The output would be a
+list of `segmentation` objects. `segmenter` contain functions to do basic 
+comparison between the models.
+
+```{r multiple_numstates}
+# relearn the models with 3 to 8 states
+objs <- lapply(3:8,
+    function(x) {
+      learn_model(inputdir = inputdir,
+                   coordsdir = coordsdir,
+                   anchorsdir = anchorsdir,
+                   chromsizefile = chromsizefile,
+                   numstates = x,
+                   assembly = 'hg18',
+                   cells = c('K562', 'GM12878'),
+                   annotation = 'RefSeq',
+                   binsize = 200)
+    })
+```
+
+- `compare_models` takes a list of `segmentation` objects and returns a vector
+with the same length. The default is to compare the correlation between the
+emission parameters of the states in the different models. Only the correlations
+of the states that has the maximum correlation with one of the states in the
+biggest model is returned.
+
+```{r compare_numstats}
+# compare the models max correlation between the states
+compare_models(objs)
+```
+
+- The other value to compare is the likelihood of the models which can be 
+indicated through the `type` argument.
+
+```{r compare_likelihood}
+# compare the models likelihood
+compare_models(objs, type = 'likelihood')
+```
+
+Setting `plot = TRUE` returns a plot with data points corresponding to the 
+models in the list. 
+
+```{r plot_comparison,fig.align='center',fig.width=7,fig.height=4}
+# compare models plots
+par(mfrow = c(1, 2))
+compare_models(objs,
+               plot = TRUE,
+               xlab = 'Model', ylab = 'State Correlation')
+compare_models(objs, type = 'likelihood',
+               plot = TRUE,
+               xlab = 'Model', ylab = 'Likelihood')
+```
+
+As the number of states increases, one of the states in the smaller model would
+be split into more than one and its emission probabilities would have higher 
+correlations with the states in the larger model.
+
+# Interpreting models parameters
+
+This section deals with the output of the model which are saved separately in 
+the slots of the `segmentation` object. As mentioned before, the package 
+provides functions to access these slots and interact with it for purposes of
+visualization or computing summaries.
+
+## Emissions & transitions
+
+The first and most important of the model output are the emissions and 
+transitions probabilities. Emission is the frequency of a particular histone 
+mark in a given chromatin state. Transition is the frequency by which a state 
+(rows) transitions to another (column). These probabilities capture the spatial
+relationships between the markers (emission) and the states (transition).
+
+To access these probabilities, we use accessors of the corresponding names. The
+output in both cases is a matrix of values between 0 and 1. The emissions matrix
+has a row for each state and a columns for each marker. The transition matrix
+has a rows (from) and columns (to) for each state.
+
+```{r parameters}
+# access object slots
+emission(obj)
+transition(obj)
+```
+
+The `plot_heatmap` takes the `segmentation` object and visualize the slot in 
+`type`. By default, this is `emission`. The output is a `Heatmap` object from
+the `ComplexHeatmap` package. These objects are very flexible and can be 
+customized to produce diverse informative figures.
+
+```{r visulaize_matrices,fig.align='center',fig.height=3,fig.width=6}
+# emission and transition plots
+h1 <- plot_heatmap(obj,
+                   row_labels = paste('S', 1:3),
+                   name = 'Emission')
+
+h2 <- plot_heatmap(obj,
+                   type = 'transition',
+                   row_labels = paste('S', 1:3),
+                   column_labels = paste('S', 1:3),
+                   name = 'Transition')
+h1 + h2
+```
+
+Here, the `emission` and `transition` probabilities are combined in one heatmap.
+
+## Overlap Enrichemnt
+
+The `overlap` slots contains the fold enrichment of each state in the genomic
+coordinates provided in the main call. The enrichment is calculated by first 
+dividing the number of bases in a state and an annotation and the number of 
+bases in an annotation and in the genome.
+
+These values can be accessed and visualized using `overlap` and `plot_heatmap`.
+
+```{r overlap}
+# overlap enrichment
+overlap(obj)
+```
+
+An important thing to note here is that the enrichment is calculated for each 
+cell or condition separately. And comparing these values between them can be 
+very useful.
+
+```{r visulaizing_overlap,fig.align='center',fig.height=3,fig.width=6}
+# overlap enrichment plots
+plot_heatmap(obj,
+             type = 'overlap',
+             column_labels = c('Genome', 'CpG', 'Exon', 'Gene',
+                               'TES', 'TSS', 'TSS2kb', 'laminB1lads'),
+             show_heatmap_legend = FALSE)
+```
+
+In this example, eight different types of coordinates or annotations were 
+included in the call. Those are shown in the columns of the heatmap and the fold
+enrichment of each state in the rows.
+
+## Genomic locations enrichment
+
+A similar fold enrichment is calculated for the regions around the transcription
+start (TSS) and end (TES) sits which are defined in the `anchordir` directory. 
+Accessors of the same name and plotting functions are provided. These values are
+also computed for each cell/condition separately.
+
+```{r genomic_locations}
+# genomic locations enrichment
+TSS(obj)
+TES(obj)
+```
+
+```{r visualizing_genomic_locaitons,fig.align='center',fig.height=3,fig.width=7}
+# genomic locations enrichment plots
+h1 <- plot_heatmap(obj,
+                   type = 'TSS',
+                   show_heatmap_legend = FALSE)
+h2 <- plot_heatmap(obj,
+                   type = 'TES',
+                   show_heatmap_legend = FALSE)
+
+h1 + h2
+```
+
+## Segments
+
+The last model output is called `segment` and contains the assignment of the 
+states to the genome. This is also provided for each cell/condition in the form
+of a `GRanges` object with the chromosome name, start and end sites in the 
+ranges part of the object and the name of the state in a metadata columns.
+
+```{r segments}
+# get segments
+segment(obj)
+```
+
+To visualize these segments, we can take advantage of Bioconductor annotation
+and visualization tools to subset and render a visual representation of the 
+segments on a given genomic region.
+
+As an example, we extracted the genomic coordinates of the gene 'ACAT1' on 
+chromosome 11 and resized it to 10kb around the transcription start site. We
+then used `Gviz`'s `AnnotationTrack` to render the ranges as tracks grouped by
+the `state` column in the `GRanges` object for each of the cell lines. 
+
+```{r visulaize_segments,fig.align='center',fig.height=3,fig.width=3}
+# gene gene coordinates
+gen <- genes(TxDb.Hsapiens.UCSC.hg18.knownGene,
+             filter = list(gene_id = 38))
+
+# extend genomic region
+prom <- promoters(gen,
+                  upstream = 10000,
+                  downstream = 10000)
+
+# annotation track
+segs1 <- segment(obj, 'K562')
+atrack1 <- AnnotationTrack(segs1$K562,
+                          group = segs1$K562$state,
+                          name = 'K562')
+
+segs2 <- segment(obj, 'GM12878')
+atrack2 <- AnnotationTrack(segs2$GM12878,
+                          group = segs2$GM12878$state,
+                          name = 'GM12878')
+
+# plot the track
+plotTracks(atrack1, from = start(prom), to = end(prom))
+plotTracks(atrack2, from = start(prom), to = end(prom))
+```
+
+Other tracks can be added to the plot to make it more informative. Here, we used
+
+- `IdeogramTrack` to show a graphic representation of chromosome 11
+- `GenomeAxisTrack` to show a scale of the exact location on the chromosome
+- `GeneRegionTrack` to show the exon, intron and transcripts of the target gene
+
+Those can be put together in one plot using `plotTracks`
+
+```{r add_tracks,fig.align='center',fig.height=4,fig.width=4}
+# ideogram track
+itrack <- IdeogramTrack(genome = 'hg18', chromosome = 11)
+
+# genome axis track
+gtrack <- GenomeAxisTrack()
+
+# gene region track
+data("geneModels")
+grtrack <- GeneRegionTrack(geneModels,
+                           genom = 'hg18',
+                           chromosome = 11,
+                           name = 'ACAT1')
+
+# put all tracks together
+plotTracks(list(itrack, gtrack, grtrack, atrack1, atrack2),
+           from = min(start(prom)),
+           to = max(end(gen)),
+           groupAnnotation = 'group')
+```
+
+Moreover, we can summarize the segmentation output in different ways to either
+show how the combination of chromatin markers are arranged or to compare 
+different cells and condition.
+
+One simple summary, is to count the occurrence of states across the genome.
+`get_frequency` does that and returns the output in tabular or graphic formats.
+
+```{r segment_frequency}
+# get segment frequency
+get_frequency(segment(obj), tidy = TRUE)
+```
+
+The frequency of the states in each cell can also be normalized by the total 
+number of states to make comparing across cell and condition easier.
+
+```{r plot_frequency,fig.align='center',fig.width=7,fig.height=4}
+# frequency plots
+par(mfrow=c(1, 2))
+get_frequency(segment(obj),
+              plot = TRUE,
+              ylab = 'Segment Frequency')
+
+get_frequency(segment(obj),
+              normalize = TRUE,
+              plot = TRUE,
+              ylab = 'Segment Fraction')
+```
+
+# Concluding remarks
+
+To conclude, the chromatin states models 
+- Emissions and transition probabilities show the frequency with which histone 
+marker or their combination occur across the genome (states). The meaning of 
+these states depends on the biological significance of the markers. Some markers
+associate with particular regions or (e.g. promoters, enhancers, etc) or 
+configurations (e.g. active, repressed, etc).
+- Fold-enrichment can be useful in defining the regions in which certain states
+occur or how they change in frequency between cells or conditions.
+- The segmentation of the genome on which these probabilities are defined can be
+used to visualize or integrate this information in other analyses such as 
+over-representation or investigating the regulation of specific regions of 
+interest.
 
 ### **Availability of supporting source code and requirements**
 
 List the following:
 
--   Project name: e.g. My bioinformatics project
--   Project home page: e.g. https://github.com/useRconf/templates
--   Operating system(s): e.g. Platform independent
--   Programming language: e.g. R
--   Other requirements: e.g. R 4.0.5 or higher
--   License: e.g. GNU GPL, FreeBSD etc.
+-   Project name: segmenter
+-   Project home page: https://github.com/MahShaaban/segmenter
+-   Operating system(s): Platform independent
+-   Programming language: R
+-   Other requirements: R 4.1 or higher
+-   License: GPL-3
 
 ### Data availability
 
+Not applicable
+
 ## Declarations
-
-### List of abbreviations
-
-...
 
 ### Competing interests
 
-...
+The authors declare no conflict of interest.
 
 ### Funding
 
-...
+This work was supported by the National Research Foundation of Korea (NRF) grant
+funded by the Ministry of Science and ICT (MSIT) of the Korea government 
+[2015R1A5A2008833 and 2020R1A2C2011416].
 
 ### Author contributions
 
-Janani Ravi and Mohamed El Fodil Ihaddaden created the Rmd and CSS
-templates, respectively.
-
-### Acknowledgments
-
-We are grateful to these resources for our inspiration to draft this Rmd
-Technical Note template.
-
-1.  [RMarkdown cookbook by Yihui Xie.](https://bookdown.org/yihui/rmarkdown-cookbook/)
-2.  [GigaScience Technical note instructions. Oxford Academic.](https://academic.oup.com/gigascience/pages/technical_note)
-3.  [ResearchGate: Writing a technical note](https://www.researchgate.net/publication/42807606_Writing_a_technical_note)
-4.  [NIST Technical Note Template](https://www.overleaf.com/latex/templates/nist-technical-note-template/gjytbtqtpsmt)
+Mahmoud Ahmed developed and maintains the package. Deok Ryong Kim supervised 
+the project.
 
 ## References
