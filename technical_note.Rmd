@@ -14,7 +14,7 @@ csl: technical_note.csl # citation style
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Abstract
+# Abstract
 
 Chromatin segmentation analysis transforms ChIP-seq data into signals over the
 genome. The latter represents the observed states in a multivariate Markov model
@@ -29,11 +29,11 @@ easier to work with the results and to integrate them in downstream analyses.
 Finally, `segmenter` provides additional tools to test, select and visualize the
 models.
 
-### Keywords
+## Keywords
 
 Chromatin Segmentation, ChromHMM, Histone Modification, ChIP-Seq
 
-## Methods
+# Methods
 
 ## Hidden Markov Models
 
@@ -64,25 +64,21 @@ The goal of the `segmenter` package is to
 - Capture the output in R objects
 - Interact with the model output for the purposes of summarizing or visualizing
 
-## Findings
+# Findings
 
-# Segmentation analysis using `segmenter`
+## Segmentation analysis using `segmenter`
 
-## Inputs
+### Inputs
 
 ChromHMM requires two types of input files. Those are
 
 - Genomic annotation files.
-
-The genomic annotation is divided into three different files
-
-  - Coordinates: the start and end location of genomic features to calculate
-  enrichment
-  - Anchors: the transcription start and end sites
-  - Chromosome size: the length of each chromosome
+- Binarized signal files from the ChIP-seq data (Check the package vignette to 
+see how to generate those)
 
 ChromHMM contains pre-formatted files for commonly used genomes. We will
-be using the human genome (hg18).
+be using the human genome (hg18) which is available from the `chromhmmData` 
+package.
 
 ```{r setup}
 # load required libraries
@@ -113,64 +109,6 @@ chromsizefile <- system.file('extdata/CHROMSIZES',
 readLines(chromsizefile, n = 3)
 ```
 
-- Binarized signal files from the ChIP-seq data
-
-The binarized signal files are text files, often one for each chromosome, that
-divide the chromosome length into bins of a given size (rows) and have binary
-values 1 or 0 for each histone markers (columns). ChromHMM provide
-modules to generate these files from ChIP-seq aligned reads in `bam` or `bed`.
-Those modules are wrapped in two functions that can be called from within R.
-
-- `binarize_bam` convert `bam` files into binary columns of 0 or 1 depending on
-whether the given marker exist in each bin across the length of the chromosome.
-- `binarize_bed` similarly convert `bed` files.
-
-These files are often large and need to be prepared in advance. Here, we are
-showing only an example using a `bam` file with random reads. Because multiple
-files are often needed to generate chromatin models, a table is required to
-assign each file a chromatin marker and a cell type or condition. In addition,
-a file containing the size of each chromosome is required. Finally, the desired
-bin size is indicated, the default is 200kb.
-
-```{r cellmarkfiletable}
-# a table to assign marker and cell names to the bam files
-cellmarkfiletable <- system.file('extdata',
-                                 'cell_mark_table.tsv',
-                                 package = 'segmenter')
-
-readLines(cellmarkfiletable, n = 3)
-```
-
-```{r binary_inputs}
-# locate input and output
-inputdir <- system.file("extdata", package = "bamsignals")
-outputdir <- tempdir()
-```
-
-```{r binarize}
-# run command
-binarize_bam(inputdir,
-             chromsizefile = chromsizefile,
-             cellmarkfiletable = cellmarkfiletable,
-             outputdir = outputdir)
-
-# show output files
-example_binaries <- list.files(outputdir, pattern = '*_binary.txt')
-example_binaries
-
-# show the format of the binary file
-readLines(file.path(outputdir, example_binaries[1]), n = 3)
-```
-
-Note that the cell/condition and the chromosome name are written on the first 
-line and the last bin is often removed as the end of the chromosome does not
-reach the 200kb bin size.
-
-Two example files are provided by ChromHMM. Those were generated from two ChIP-
-seq experiments of nine histone modification markers in the K562 and GM12878
-cell lines. The aligned reads were counted and binarized into 0 or 1 in bins of 
-200kb in chromosome 11.
-
 ```{r input_bins}
 # locate input and output files
 inputdir <- system.file('extdata/SAMPLEDATA_HG18',
@@ -179,7 +117,7 @@ inputdir <- system.file('extdata/SAMPLEDATA_HG18',
 list.files(inputdir)
 ```
 
-## Model learning
+### Model learning
 
 The main function in `segmenter` is called `learn_model`. This wraps the the 
 Java module that learns a chromatin segmentation model of a given number of 
@@ -233,95 +171,12 @@ For each slot, an accessor function with the same name is provided to access its
 contents. For example, to access the emission probabilities call `emission` on
 the object.
 
-```{r accessors}
-# access object slots
-emission(obj)
-```
+### Emissions & transitions
 
-Some accessors more arguments to subset the object. For example, the `segment`
-method take a `cell` name to return on the segments in the corresponding cell.
-
-```{r subset}
-# subset the segment slot
-segment(obj, cell = 'K562')
-```
-
-# Comparing models
-
-To choose a model that fits the data well, one can learn multiple models with 
-different parameters, for example the number of states and compare them. In this
-example, we will be calling `learn_model` several times using `lapply` with the 
-same inputs except the number of states (`numstates`). The output would be a
-list of `segmentation` objects. `segmenter` contain functions to do basic 
-comparison between the models.
-
-```{r multiple_numstates}
-# relearn the models with 3 to 8 states
-objs <- lapply(3:8,
-    function(x) {
-      learn_model(inputdir = inputdir,
-                   coordsdir = coordsdir,
-                   anchorsdir = anchorsdir,
-                   chromsizefile = chromsizefile,
-                   numstates = x,
-                   assembly = 'hg18',
-                   cells = c('K562', 'GM12878'),
-                   annotation = 'RefSeq',
-                   binsize = 200)
-    })
-```
-
-- `compare_models` takes a list of `segmentation` objects and returns a vector
-with the same length. The default is to compare the correlation between the
-emission parameters of the states in the different models. Only the correlations
-of the states that has the maximum correlation with one of the states in the
-biggest model is returned.
-
-```{r compare_numstats}
-# compare the models max correlation between the states
-compare_models(objs)
-```
-
-- The other value to compare is the likelihood of the models which can be 
-indicated through the `type` argument.
-
-```{r compare_likelihood}
-# compare the models likelihood
-compare_models(objs, type = 'likelihood')
-```
-
-Setting `plot = TRUE` returns a plot with data points corresponding to the 
-models in the list. 
-
-```{r plot_comparison,fig.align='center',fig.width=7,fig.height=4}
-# compare models plots
-par(mfrow = c(1, 2))
-compare_models(objs,
-               plot = TRUE,
-               xlab = 'Model', ylab = 'State Correlation')
-compare_models(objs, type = 'likelihood',
-               plot = TRUE,
-               xlab = 'Model', ylab = 'Likelihood')
-```
-
-As the number of states increases, one of the states in the smaller model would
-be split into more than one and its emission probabilities would have higher 
-correlations with the states in the larger model.
-
-# Interpreting models parameters
-
-This section deals with the output of the model which are saved separately in 
-the slots of the `segmentation` object. As mentioned before, the package 
-provides functions to access these slots and interact with it for purposes of
-visualization or computing summaries.
-
-## Emissions & transitions
-
-The first and most important of the model output are the emissions and 
-transitions probabilities. Emission is the frequency of a particular histone 
-mark in a given chromatin state. Transition is the frequency by which a state 
-(rows) transitions to another (column). These probabilities capture the spatial
-relationships between the markers (emission) and the states (transition).
+Emission is the frequency of a particular histone  mark in a given chromatin 
+state. Transition is the frequency by which a state (rows) transitions to 
+another (column). These probabilities capture the spatial relationships between 
+the markers (emission) and the states (transition).
 
 To access these probabilities, we use accessors of the corresponding names. The
 output in both cases is a matrix of values between 0 and 1. The emissions matrix
@@ -355,14 +210,13 @@ h1 + h2
 
 Here, the `emission` and `transition` probabilities are combined in one heatmap.
 
-## Overlap Enrichemnt
+### Overlap Enrichemnt
 
 The `overlap` slots contains the fold enrichment of each state in the genomic
 coordinates provided in the main call. The enrichment is calculated by first 
 dividing the number of bases in a state and an annotation and the number of 
-bases in an annotation and in the genome.
-
-These values can be accessed and visualized using `overlap` and `plot_heatmap`.
+bases in an annotation and in the genome. These values can be accessed and 
+visualized using `overlap` and `plot_heatmap`.
 
 ```{r overlap}
 # overlap enrichment
@@ -370,7 +224,7 @@ overlap(obj)
 ```
 
 An important thing to note here is that the enrichment is calculated for each 
-cell or condition separately. And comparing these values between them can be 
+cell or condition separately and comparing these values between them can be 
 very useful.
 
 ```{r visulaizing_overlap,fig.align='center',fig.height=3,fig.width=6}
@@ -386,7 +240,7 @@ In this example, eight different types of coordinates or annotations were
 included in the call. Those are shown in the columns of the heatmap and the fold
 enrichment of each state in the rows.
 
-## Genomic locations enrichment
+### Genomic locations enrichment
 
 A similar fold enrichment is calculated for the regions around the transcription
 start (TSS) and end (TES) sits which are defined in the `anchordir` directory. 
@@ -411,7 +265,7 @@ h2 <- plot_heatmap(obj,
 h1 + h2
 ```
 
-## Segments
+### Segments
 
 The last model output is called `segment` and contains the assignment of the 
 states to the genome. This is also provided for each cell/condition in the form
@@ -515,6 +369,68 @@ get_frequency(segment(obj),
               ylab = 'Segment Fraction')
 ```
 
+## Comparing models
+
+To choose a model that fits the data well, one can learn multiple models with 
+different parameters, for example the number of states and compare them. In this
+example, we will be calling `learn_model` several times using `lapply` with the 
+same inputs except the number of states (`numstates`). The output would be a
+list of `segmentation` objects. `segmenter` contain functions to do basic 
+comparison between the models.
+
+```{r multiple_numstates}
+# relearn the models with 3 to 8 states
+objs <- lapply(3:8,
+    function(x) {
+      learn_model(inputdir = inputdir,
+                   coordsdir = coordsdir,
+                   anchorsdir = anchorsdir,
+                   chromsizefile = chromsizefile,
+                   numstates = x,
+                   assembly = 'hg18',
+                   cells = c('K562', 'GM12878'),
+                   annotation = 'RefSeq',
+                   binsize = 200)
+    })
+```
+
+- `compare_models` takes a list of `segmentation` objects and returns a vector
+with the same length. The default is to compare the correlation between the
+emission parameters of the states in the different models. Only the correlations
+of the states that has the maximum correlation with one of the states in the
+biggest model is returned.
+
+```{r compare_numstats}
+# compare the models max correlation between the states
+compare_models(objs)
+```
+
+- The other value to compare is the likelihood of the models which can be 
+indicated through the `type` argument.
+
+```{r compare_likelihood}
+# compare the models likelihood
+compare_models(objs, type = 'likelihood')
+```
+
+Setting `plot = TRUE` returns a plot with data points corresponding to the 
+models in the list. 
+
+```{r plot_comparison,fig.align='center',fig.width=7,fig.height=4}
+# compare models plots
+par(mfrow = c(1, 2))
+compare_models(objs,
+               plot = TRUE,
+               xlab = 'Model', ylab = 'State Correlation')
+compare_models(objs, type = 'likelihood',
+               plot = TRUE,
+               xlab = 'Model', ylab = 'Likelihood')
+```
+
+As the number of states increases, one of the states in the smaller model would
+be split into more than one and its emission probabilities would have higher 
+correlations with the states in the larger model.
+
 # Concluding remarks
 
 To conclude, the chromatin states models 
@@ -530,7 +446,7 @@ used to visualize or integrate this information in other analyses such as
 over-representation or investigating the regulation of specific regions of 
 interest.
 
-### **Availability of supporting source code and requirements**
+## **Availability of supporting source code and requirements**
 
 List the following:
 
@@ -540,10 +456,6 @@ List the following:
 -   Programming language: R
 -   Other requirements: R 4.1 or higher
 -   License: GPL-3
-
-### Data availability
-
-Not applicable
 
 ## Declarations
 
