@@ -1,0 +1,6 @@
+[submodule "segmenter"]
+	path = segmenter
+	url = git@git.bioconductor.org:packages/segmenter
+[submodule "chromhmmData"]
+	path = chromhmmData
+	url = git@git.bioconductor.org:packages/chromhmmData
